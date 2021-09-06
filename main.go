@@ -1,19 +1,29 @@
 package main
 
 import (
+	"archive/tar"
 	"bufio"
+	"compress/gzip"
 	"encoding/json"
+	"errors"
 	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 )
 
-const latestReleaseUrl = "https://api.github.com/repos/xtaci/kcptun/releases/latest"
+const (
+	latestReleaseUrl = "https://api.github.com/repos/xtaci/kcptun/releases/latest"
+	WinPkg           = "-windows-amd64-"
+	LinuxPkg         = "-linux-amd64-"
+	MacPkg           = "-darwin-amd64-"
+)
 
 func main() {
 	path, err := os.Getwd()
@@ -24,6 +34,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	log.Println(binPath)
 	return
 	runCmd(binPath)
 }
@@ -96,7 +107,7 @@ func download(dir string) (string, error) {
 	_ = json.Unmarshal(body, &result)
 	var obj IReleaseAsset
 	for _, asset := range result.Assets {
-		if strings.Contains(asset.Name, "-darwin-amd64-") {
+		if strings.Contains(asset.Name, getTargetPkgName()) {
 			obj = asset
 			break
 		}
@@ -106,9 +117,14 @@ func download(dir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if r.StatusCode != 200 {
+		return "", errors.New(r.Status)
+	}
 	defer r.Body.Close()
 
-	p := dir + "/" + obj.Name
+	workDir := filepath.Join(dir, "bin")
+	_ = os.MkdirAll(workDir, os.ModePerm)
+	p := filepath.Join(dir, "bin", obj.Name)
 	out, err := os.Create(p)
 	if err != nil {
 		return "", err
@@ -119,5 +135,77 @@ func download(dir string) (string, error) {
 		return "", err
 	}
 
+	file, err := os.Open(p)
+	if err != nil {
+		return "", err
+	}
+
+	p, err = ExtractTarGz(file, workDir)
+	if err != nil {
+		return "", err
+	}
+
 	return p, nil
+}
+
+func ExtractTarGz(gzipStream io.Reader, parentFolder string) (string, error) {
+	uncompressedStream, err := gzip.NewReader(gzipStream)
+	if err != nil {
+		log.Fatal("ExtractTarGz: NewReader failed")
+	}
+
+	bin := ""
+	tarReader := tar.NewReader(uncompressedStream)
+
+	for true {
+		header, err := tarReader.Next()
+
+		if err == io.EOF {
+			break
+		}
+
+		if err != nil {
+			log.Fatalf("ExtractTarGz: Next() failed: %s", err.Error())
+		}
+
+		p := filepath.Join(parentFolder, header.Name)
+		switch header.Typeflag {
+		case tar.TypeDir:
+			if err := os.Mkdir(p, 0755); err != nil {
+				log.Fatalf("ExtractTarGz: Mkdir() failed: %s", err.Error())
+			}
+		case tar.TypeReg:
+			outFile, err := os.Create(p)
+			if err != nil {
+				log.Fatalf("ExtractTarGz: Create() failed: %s", err.Error())
+			}
+			if _, err := io.Copy(outFile, tarReader); err != nil {
+				log.Fatalf("ExtractTarGz: Copy() failed: %s", err.Error())
+			}
+			if strings.Contains(p, "client_") {
+				bin = p
+			}
+			outFile.Close()
+
+		default:
+			log.Fatalf("ExtractTarGz: uknown type: %s in %s", header.Typeflag, header.Name)
+		}
+
+	}
+
+	return bin, nil
+}
+
+func getTargetPkgName() string {
+	switch runtime.GOOS {
+	case "windows":
+		return WinPkg
+	case "linux":
+		return LinuxPkg
+	case "darwin":
+		return MacPkg
+	default:
+		log.Fatalf("No platform found.")
+	}
+	return ""
 }
