@@ -2,18 +2,34 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
+	"io"
+	"io/ioutil"
 	"log"
+	"net/http"
+	"os"
 	"os/exec"
+	"strings"
 	"sync"
 )
 
+const latestReleaseUrl = "https://api.github.com/repos/xtaci/kcptun/releases/latest"
+
 func main() {
-	runCmd()
+	path, err := os.Getwd()
+	if err != nil {
+		log.Fatal(err)
+	}
+	binPath, err := download(path)
+	if err != nil {
+		log.Fatal(err)
+	}
+	return
+	runCmd(binPath)
 }
 
-func runCmd() {
+func runCmd(bin string) {
 	var wg sync.WaitGroup
-	bin := "/Users/al/tmp/kcptun/client_darwin_amd64"
 	args := []string{"-c", "/Users/al/tmp/kcptun/la.json"}
 	cmd := exec.Command(bin, args...)
 	stdout, err := cmd.StdoutPipe()
@@ -62,4 +78,46 @@ func killCmd(cmd *exec.Cmd) {
 	if err := cmd.Process.Kill(); err != nil {
 		log.Fatal("failed to kill: ", cmd.Process.Pid)
 	}
+}
+
+func download(dir string) (string, error) {
+	resp, err := http.Get(latestReleaseUrl)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	result := IReleaseResp{}
+	_ = json.Unmarshal(body, &result)
+	var obj IReleaseAsset
+	for _, asset := range result.Assets {
+		if strings.Contains(asset.Name, "-darwin-amd64-") {
+			obj = asset
+			break
+		}
+	}
+
+	r, err := http.Get(obj.BrowserDownloadURL)
+	if err != nil {
+		return "", err
+	}
+	defer r.Body.Close()
+
+	p := dir + "/" + obj.Name
+	out, err := os.Create(p)
+	if err != nil {
+		return "", err
+	}
+	defer out.Close()
+
+	if _, err = io.Copy(out, r.Body); err != nil {
+		return "", err
+	}
+
+	return p, nil
 }
