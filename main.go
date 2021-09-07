@@ -238,5 +238,11 @@ func getBinPath(dir string) (string, error) {
 		return "", err
 	}
 
+	out, err := exec.Command(filePath, "-v").Output()
+	if err != nil {
+		return "", err
+	}
+
+	log.Printf(string(out))
 	return filePath, nil
 }
