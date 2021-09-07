@@ -26,16 +26,22 @@ const (
 )
 
 func main() {
-	path, err := os.Getwd()
+	dir, err := os.Getwd()
 	if err != nil {
 		log.Fatal(err)
 	}
-	binPath, err := download(path)
-	if err != nil {
-		log.Fatal(err)
+
+	binPath := ""
+	if binPath, err = getBinPath(dir); err != nil {
+		log.Println("get binary file error: ", err)
+
+		binPath, err = download(dir)
+		if err != nil {
+			log.Fatal(err)
+		}
 	}
-	log.Println(binPath)
-	return
+
+	log.Println("[kcptun] binary path is: ", binPath)
 	runCmd(binPath)
 }
 
@@ -92,6 +98,7 @@ func killCmd(cmd *exec.Cmd) {
 }
 
 func download(dir string) (string, error) {
+	log.Println("fetching latest binary...")
 	resp, err := http.Get(latestReleaseUrl)
 	if err != nil {
 		return "", err
@@ -112,7 +119,7 @@ func download(dir string) (string, error) {
 			break
 		}
 	}
-
+	log.Printf("got latest version %s", result.TagName)
 	r, err := http.Get(obj.BrowserDownloadURL)
 	if err != nil {
 		return "", err
@@ -134,17 +141,26 @@ func download(dir string) (string, error) {
 	if _, err = io.Copy(out, r.Body); err != nil {
 		return "", err
 	}
+	log.Printf("downloaded tar %s", obj.Name)
 
 	file, err := os.Open(p)
 	if err != nil {
 		return "", err
 	}
 
+	log.Printf("prepare to decompress %s", obj.Name)
 	p, err = ExtractTarGz(file, workDir)
 	if err != nil {
 		return "", err
 	}
 
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(p, 0755); err != nil {
+			return "", err
+		}
+	}
+
+	log.Printf("decompressed")
 	return p, nil
 }
 
@@ -208,4 +224,19 @@ func getTargetPkgName() string {
 		log.Fatalf("No platform found.")
 	}
 	return ""
+}
+
+func getBinPath(dir string) (string, error) {
+	filePath := filepath.Join(dir, "bin", "client_"+runtime.GOOS+"_amd64")
+	file, err := os.OpenFile(filePath, os.O_RDWR, 0644)
+	defer file.Close()
+
+	if err == os.ErrNotExist {
+		return "", err
+	}
+	if err != nil {
+		return "", err
+	}
+
+	return filePath, nil
 }
